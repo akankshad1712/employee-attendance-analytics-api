@@ -54,17 +54,27 @@ def client():
 # ---------------------------------------------------------------------------
 # Per-test DB reset — delete_many avoids the Atlas async-drop race
 # ---------------------------------------------------------------------------
+def _wipe():
+    """Delete all documents from both test collections with majority write concern."""
+    logs_col.with_options(
+        write_concern=__import__("pymongo", fromlist=["WriteConcern"]).WriteConcern(w="majority")
+    ).delete_many({})
+    employees_col.with_options(
+        write_concern=__import__("pymongo", fromlist=["WriteConcern"]).WriteConcern(w="majority")
+    ).delete_many({})
+
+
 @pytest.fixture(autouse=True)
 def clean_db():
     """
-    Wipe all documents from both test collections before every test.
-    Does NOT drop the collections (avoids Atlas async-drop → IndexBuildAborted race).
-    Ensures indexes exist with a simple retry on transient errors.
+    Wipe both test collections before AND after every test.
+    Uses majority write concern so Atlas confirms the delete before the
+    next test's setup or the next request begins.
+    Does NOT drop the collections (avoids Atlas async IndexBuildAborted race).
     """
-    logs_col.delete_many({})
-    employees_col.delete_many({})
+    _wipe()
 
-    # Ensure indexes; retry once if Atlas is still settling
+    # Ensure indexes; retry on transient Atlas settling errors
     for attempt in range(3):
         try:
             _create_indexes()
@@ -73,4 +83,8 @@ def clean_db():
             if attempt == 2:
                 raise
             time.sleep(1)
+
     yield
+
+    # Teardown: also wipe after, so the next test starts truly clean
+    _wipe()
